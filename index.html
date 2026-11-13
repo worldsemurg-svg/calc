@@ -1,0 +1,1087 @@
+﻿html
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Калькулятор-Камера</title>
+
+    <!-- PWA и настройки полноэкранного запуска на iOS и Android -->
+    <meta name="theme-color" content="#090d16">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Скан-Счет">
+    <link id="appleTouchIcon" rel="apple-touch-icon" href="">
+    <link id="pwaManifestLink" rel="manifest" href="">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Telegram WebApp SDK (для работы внутри @BotFather Mini Apps) -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Tesseract.js для автономного распознавания в браузере -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .mono-num {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        @keyframes scanline {
+            0% { top: 8%; opacity: 0.3; }
+            50% { top: 88%; opacity: 1; }
+            100% { top: 8%; opacity: 0.3; }
+        }
+        .scanner-laser {
+            position: absolute;
+            left: 4%;
+            right: 4%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #10b981, #34d399, #10b981, transparent);
+            box-shadow: 0 0 8px #10b981;
+            animation: scanline 2.2s infinite ease-in-out;
+            pointer-events: none;
+        }
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-[100dvh] w-full overflow-hidden flex flex-col items-center justify-between">
+
+    <!-- Главный контейнер -->
+    <div class="w-full max-w-md h-full flex flex-col bg-slate-900 shadow-2xl relative overflow-hidden">
+
+        <!-- 1. ВЕРХНИЙ БЛОК: ИТОГОВОЕ ТАБЛО И СТАТУС -->
+        <header class="bg-slate-900/95 backdrop-blur border-b border-slate-800 px-3.5 py-2.5 z-20 shrink-0">
+            <div class="flex items-center justify-between mb-1.5 gap-1">
+                <div class="flex items-center gap-1.5 min-w-0">
+                    <span id="ocrStatusDot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+                    <span id="ocrStatusText" class="text-[11px] font-medium text-slate-400 truncate">Загрузка OCR...</span>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button id="switchVisionModeBtn" title="Режим обработки изображения" class="px-2.5 py-1 rounded-lg bg-slate-800 text-[11px] text-slate-300 border border-slate-700 flex items-center gap-1.5 active:scale-95 transition">
+                        <i class="fa-solid fa-eye text-emerald-400"></i>
+                        <span id="visionModeText">Авто</span>
+                    </button>
+                    <button id="clearAllBtn" class="px-2.5 py-1 rounded-lg bg-rose-500/15 text-rose-400 border border-rose-500/30 text-[11px] font-semibold hover:bg-rose-500/25 active:scale-95 transition">
+                        Сброс
+                    </button>
+                </div>
+            </div>
+
+            <!-- Табло суммы -->
+            <div class="flex items-baseline justify-between bg-slate-950/90 rounded-2xl px-4 py-2 border border-slate-800/80 shadow-inner">
+                <div class="flex flex-col">
+                    <span class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Итоговая сумма</span>
+                    <span id="itemsCountBadge" class="text-xs text-slate-400">Позиций: 0</span>
+                </div>
+                <div class="text-right overflow-x-auto no-scrollbar">
+                    <div id="totalDisplay" class="mono-num text-3xl sm:text-4xl font-bold text-emerald-400 tracking-tight">
+                        0
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- 2. ЦЕНТРАЛЬНЫЙ БЛОК: КАМЕРА И РАМКА-ПРИЦЕЛ (ROI) -->
+        <section class="relative w-full h-52 sm:h-60 bg-black shrink-0 overflow-hidden flex items-center justify-center border-b border-slate-800">
+            <!-- Видеопоток с камеры -->
+            <video id="cameraVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+
+            <!-- Заглушка, если камера недоступна -->
+            <div id="cameraFallback" class="hidden absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center p-4 text-center z-10">
+                <i class="fa-solid fa-video-slash text-3xl text-rose-400 mb-2"></i>
+                <p class="text-xs text-slate-300 font-medium mb-3">Нет доступа к камере. Для работы камеры откройте приложение по защищенной HTTPS-ссылке и разрешите доступ.</p>
+                <button id="retryCameraBtn" class="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 text-xs font-bold shadow active:scale-95 transition">
+                    Подключить камеру
+                </button>
+            </div>
+
+            <!-- Затемнение вокруг прицела -->
+            <div class="absolute inset-0 pointer-events-none flex flex-col justify-between">
+                <div class="w-full h-1/5 bg-black/60 backdrop-blur-[1px] flex items-center justify-between px-3">
+                    <span class="text-[11px] text-slate-300 font-medium bg-black/50 px-2.5 py-0.5 rounded-full border border-white/10">
+                        Держите ценник в рамке
+                    </span>
+                    <span id="liveConfidenceBadge" class="text-[10px] font-mono text-slate-400 bg-black/50 px-2 py-0.5 rounded-full border border-white/10">
+                        Готов к скану
+                    </span>
+                </div>
+
+                <!-- САМА РАМКА ПРИЦЕЛА -->
+                <div class="w-full h-3/5 flex items-center justify-between px-5 relative">
+                    <div id="roiBox" class="w-full h-full border-2 border-emerald-400/90 rounded-2xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] overflow-hidden flex items-center justify-center">
+                        <div class="absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 border-emerald-400 rounded-tl-md"></div>
+                        <div class="absolute top-0 right-0 w-5 h-5 border-t-4 border-r-4 border-emerald-400 rounded-tr-md"></div>
+                        <div class="absolute bottom-0 left-0 w-5 h-5 border-b-4 border-l-4 border-emerald-400 rounded-bl-md"></div>
+                        <div class="absolute bottom-0 right-0 w-5 h-5 border-b-4 border-r-4 border-emerald-400 rounded-br-md"></div>
+                        
+                        <div class="absolute inset-x-4 top-1/2 h-[1px] bg-emerald-400/20"></div>
+                        <div class="absolute inset-y-3 left-1/2 w-[1px] bg-emerald-400/20"></div>
+
+                        <div class="scanner-laser"></div>
+
+                        <div id="scanFeedbackOverlay" class="hidden absolute inset-0 bg-emerald-950/90 backdrop-blur-sm flex flex-col items-center justify-center transition-all">
+                            <span id="scanFeedbackText" class="mono-num text-2xl font-bold text-emerald-300"></span>
+                            <span id="scanFormatTag" class="text-[10px] text-emerald-400/80 mt-0.5"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="w-full h-1/5 bg-black/65 backdrop-blur-[1px] flex items-center justify-between px-3">
+                    <div class="flex items-center gap-2">
+                        <canvas id="roiCanvas" class="h-8 w-28 bg-white rounded border border-slate-600 object-contain"></canvas>
+                        <div class="flex flex-col">
+                            <span class="text-[10px] text-slate-300 font-medium leading-tight">Зрение OCR</span>
+                            <span id="rawOcrPreview" class="text-[9px] font-mono text-emerald-400 truncate max-w-[130px]">Ожидание...</span>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-1.5 pointer-events-auto">
+                        <button id="zoomBtn" title="Приблизить ценник (2x)" class="px-2.5 h-7 rounded-lg bg-slate-800/90 text-slate-300 border border-slate-700 text-[11px] font-mono font-bold hover:bg-slate-700 active:scale-95 transition">
+                            1.0x
+                        </button>
+                        <button id="torchBtn" title="Фонарик" class="w-7 h-7 rounded-lg bg-slate-800/90 text-slate-300 border border-slate-700 flex items-center justify-center hover:bg-slate-700 active:scale-95 transition">
+                            <i class="fa-solid fa-bolt text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. ПАНЕЛЬ МАТЕМАТИЧЕСКИХ ЗНАКОВ (+, -, ×, ÷) И КНОПКА СКАНИРОВАНИЯ -->
+        <section class="bg-slate-900 px-3 pt-2.5 pb-2.5 border-b border-slate-800 shrink-0 z-10">
+            <div class="grid grid-cols-4 gap-2 mb-2.5">
+                <button data-op="+" class="op-btn py-2.5 rounded-xl font-bold text-xl flex flex-col items-center justify-center border transition active:scale-95 bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg shadow-emerald-500/20">
+                    <span>+</span>
+                    <span class="text-[10px] font-semibold uppercase tracking-tight">Плюс</span>
+                </button>
+                <button data-op="-" class="op-btn py-2.5 rounded-xl font-bold text-xl flex flex-col items-center justify-center border transition active:scale-95 bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750">
+                    <span>−</span>
+                    <span class="text-[10px] font-medium uppercase tracking-tight text-slate-400">Минус</span>
+                </button>
+                <button data-op="*" class="op-btn py-2.5 rounded-xl font-bold text-xl flex flex-col items-center justify-center border transition active:scale-95 bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750">
+                    <span>×</span>
+                    <span class="text-[10px] font-medium uppercase tracking-tight text-slate-400">Умножить</span>
+                </button>
+                <button data-op="/" class="op-btn py-2.5 rounded-xl font-bold text-xl flex flex-col items-center justify-center border transition active:scale-95 bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750">
+                    <span>÷</span>
+                    <span class="text-[10px] font-medium uppercase tracking-tight text-slate-400">Разделить</span>
+                </button>
+            </div>
+
+            <button id="captureBtn" class="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-bold text-base shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2.5 active:scale-[0.98] transition disabled:opacity-50">
+                <i id="captureIcon" class="fa-solid fa-expand text-lg"></i>
+                <span id="captureBtnText">СКАНИРОВАТЬ ЧИСЛО (<span id="activeOpLabel">+</span>)</span>
+            </button>
+        </section>
+
+        <!-- 4. НИЖНИЙ БЛОК: ЛЕНТА ОПЕРАЦИЙ С АВТОСОХРАНЕНИЕМ -->
+        <section class="flex-1 flex flex-col min-h-0 bg-slate-950/60">
+            <div class="px-4 py-2 flex items-center justify-between border-b border-slate-800/80 text-xs text-slate-400">
+                <span class="font-medium flex items-center gap-1.5">
+                    <i class="fa-solid fa-cloud-arrow-down text-emerald-400 text-[11px]"></i>
+                    <span>Автосохранение чека включено</span>
+                </span>
+                <button id="undoBtn" class="text-slate-400 hover:text-slate-200 disabled:opacity-30 transition" disabled>
+                    <i class="fa-solid fa-rotate-left mr-1"></i>Отменить
+                </button>
+            </div>
+
+            <div id="historyList" class="flex-1 overflow-y-auto px-3 py-2 space-y-1.5 no-scrollbar">
+                <div id="emptyHistoryState" class="h-full flex flex-col items-center justify-center text-center py-6 px-4 text-slate-500">
+                    <i class="fa-solid fa-barcode text-2xl mb-2 opacity-40"></i>
+                    <p class="text-xs leading-relaxed">Наведите рамку на ценник и нажмите «Сканировать число». Все расчеты автоматически сохраняются в памяти телефона.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ -->
+        <div id="toastBox" class="pointer-events-none opacity-0 transition-all duration-300 fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-2.5 rounded-2xl shadow-xl text-xs font-medium flex items-center gap-2">
+            <i id="toastIcon" class="fa-solid fa-circle-info text-emerald-400"></i>
+            <span id="toastMessage">Сообщение</span>
+        </div>
+
+        <!-- МОДАЛЬНОЕ ОКНО ПОДТВЕРЖДЕНИЯ СБРОСА -->
+        <div id="confirmResetModal" class="hidden absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-xs w-full text-center shadow-2xl">
+                <div class="w-12 h-12 rounded-full bg-rose-500/15 text-rose-400 flex items-center justify-center mx-auto mb-3 text-xl">
+                    <i class="fa-solid fa-trash-can"></i>
+                </div>
+                <h3 class="text-base font-bold text-white mb-1">Очистить весь список?</h3>
+                <p class="text-xs text-slate-400 mb-4">Текущая сумма и все отсканированные позиции будут сброшены до нуля.</p>
+                <div class="flex gap-2">
+                    <button id="cancelResetBtn" class="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">Отмена</button>
+                    <button id="confirmResetBtn" class="flex-1 py-2.5 rounded-xl bg-rose-500 text-white text-xs font-bold">Сбросить</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // =========================================================================
+        // 0. ГЕНЕРАЦИЯ PWA-ИКОНКИ И ПОДДЕРЖКА TELEGRAM MINI APPS
+        // =========================================================================
+        function setupPWA() {
+            // Если открыто внутри Telegram Mini App — разворачиваем на весь экран
+            if (window.Telegram && window.Telegram.WebApp) {
+                try {
+                    window.Telegram.WebApp.ready();
+                    window.Telegram.WebApp.expand();
+                } catch (e) {}
+            }
+
+            // Рисуем стильную иконку приложения на Canvas (512x512)
+            const iconCanvas = document.createElement('canvas');
+            iconCanvas.width = 512;
+            iconCanvas.height = 512;
+            const ictx = iconCanvas.getContext('2d');
+
+            ictx.fillStyle = '#0f172a';
+            ictx.fillRect(0, 0, 512, 512);
+
+            ictx.strokeStyle = '#10b981';
+            ictx.lineWidth = 28;
+            ictx.strokeRect(56, 56, 400, 400);
+
+            ictx.fillStyle = '#34d399';
+            ictx.font = 'bold 170px monospace';
+            ictx.textAlign = 'center';
+            ictx.textBaseline = 'middle';
+            ictx.fillText('±', 256, 260);
+
+            const iconDataUrl = iconCanvas.toDataURL('image/png');
+            document.getElementById('appleTouchIcon').href = iconDataUrl;
+
+            const manifest = {
+                name: 'Калькулятор-Камера Ценников',
+                short_name: 'Скан-Счет',
+                description: 'Быстрое сложение и вычитание ценников через камеру',
+                start_url: './',
+                display: 'standalone',
+                orientation: 'portrait',
+                background_color: '#090d16',
+                theme_color: '#090d16',
+                icons: [
+                    { src: iconDataUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+                ]
+            };
+
+            const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+            document.getElementById('pwaManifestLink').href = URL.createObjectURL(manifestBlob);
+        }
+
+        // =========================================================================
+        // БАЗА ЗНАНИЙ ФОРМАТОВ ЧИСЕЛ И ЦЕННИКОВ (NUMBER FORMAT DATABASE)
+        // =========================================================================
+        const NUMBER_FORMAT_DB = {
+            glyphCorrections: {
+                'O': '0', 'o': '0', 'Q': '0', 'D': '0', 'U': '0', 'C': '0',
+                'I': '1', 'l': '1', '|': '1', '!': '1', 'i': '1', 'j': '1', ']': '1', '[': '1',
+                'Z': '2', 'z': '2',
+                'E': '3',
+                'A': '4', 'h': '4',
+                'S': '5', 's': '5', '$': '5',
+                'G': '6', 'b': '6',
+                'T': '7', '?': '7',
+                'B': '8', '&': '8', '%': '8',
+                'g': '9', 'q': '9'
+            },
+
+            currencyAndUnitNoise: /(сум|so'm|som|uzs|руб|р\.|rub|usd|тг|кг|гр|шт|л|мл|акция|скидка|цена|за)/gi,
+
+            ignorePatterns: [
+                /^\d{8}$/,
+                /^\d{12,14}$/,
+                /^\d{2}[./-]\d{2}[./-]\d{2,4}$/
+            ],
+
+            patterns: [
+                {
+                    id: 'THOUSANDS_SPACE_DEC',
+                    name: 'Тысячи с пробелом и копейками',
+                    regex: /\b\d{1,3}(?:[\s\u00A0']\d{3})+[.,]\d{1,2}\b/g,
+                    priority: 100,
+                    normalize: (str) => parseFloat(str.replace(/[\s\u00A0']/g, '').replace(',', '.'))
+                },
+                {
+                    id: 'THOUSANDS_SPACE_INT',
+                    name: 'Разряды тысяч через пробел',
+                    regex: /\b\d{1,3}(?:[\s\u00A0']+\d{3})+\b/g,
+                    priority: 95,
+                    normalize: (str) => parseFloat(str.replace(/[\s\u00A0']/g, ''))
+                },
+                {
+                    id: 'THOUSANDS_DOT_OR_COMMA',
+                    name: 'Разделитель тысяч точкой/запятой',
+                    regex: /\b\d{1,3}(?:[.,]\d{3})+\b/g,
+                    priority: 90,
+                    normalize: (str) => parseFloat(str.replace(/[.,]/g, ''))
+                },
+                {
+                    id: 'DECIMAL_PRICE',
+                    name: 'Дробная цена с копейками',
+                    regex: /\b\d{1,6}[.,-]\d{1,2}\b/g,
+                    priority: 85,
+                    normalize: (str) => parseFloat(str.replace(/[,-]/g, '.'))
+                },
+                {
+                    id: 'SOLID_INTEGER',
+                    name: 'Целое число',
+                    regex: /\b\d{1,7}\b/g,
+                    priority: 75,
+                    normalize: (str) => parseFloat(str)
+                }
+            ]
+        };
+
+        const VISION_MODES = [
+            { id: 'auto', label: 'Авто' },
+            { id: 'contrast', label: 'Контур' },
+            { id: 'invert', label: 'Инверсия' }
+        ];
+
+        const STORAGE_KEY = 'camera_calc_saved_state_v2';
+
+        const state = {
+            currentOp: '+',
+            operations: [],
+            visionModeIndex: 0,
+            isScanning: false,
+            ocrWorker: null,
+            ocrReady: false,
+            videoStream: null,
+            torchEnabled: false,
+            zoomLevel: 1.0
+        };
+
+        // Элементы DOM
+        const videoEl = document.getElementById('cameraVideo');
+        const roiBox = document.getElementById('roiBox');
+        const roiCanvas = document.getElementById('roiCanvas');
+        const roiCtx = roiCanvas.getContext('2d', { willReadFrequently: true });
+
+        const workCanvas = document.createElement('canvas');
+        const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
+
+        const totalDisplay = document.getElementById('totalDisplay');
+        const itemsCountBadge = document.getElementById('itemsCountBadge');
+        const historyList = document.getElementById('historyList');
+        const emptyHistoryState = document.getElementById('emptyHistoryState');
+
+        const ocrStatusDot = document.getElementById('ocrStatusDot');
+        const ocrStatusText = document.getElementById('ocrStatusText');
+        const captureBtn = document.getElementById('captureBtn');
+        const captureBtnText = document.getElementById('captureBtnText');
+        const scanFeedbackOverlay = document.getElementById('scanFeedbackOverlay');
+        const scanFeedbackText = document.getElementById('scanFeedbackText');
+        const scanFormatTag = document.getElementById('scanFormatTag');
+        const rawOcrPreview = document.getElementById('rawOcrPreview');
+        const liveConfidenceBadge = document.getElementById('liveConfidenceBadge');
+
+        // ==========================================
+        // СОХРАНЕНИЕ В ПАМЯТЬ ТЕЛЕФОНА (LOCALSTORAGE)
+        // ==========================================
+        function saveStateToPhone() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                    operations: state.operations,
+                    currentOp: state.currentOp
+                }));
+            } catch (e) {}
+        }
+
+        function loadStateFromPhone() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed.operations)) {
+                    state.operations = parsed.operations;
+                }
+                if (parsed.currentOp) {
+                    setActiveOperator(parsed.currentOp);
+                }
+            } catch (e) {}
+        }
+
+        // ==========================================
+        // УВЕДОМЛЕНИЯ
+        // ==========================================
+        let toastTimer = null;
+        function showToast(message, type = 'info') {
+            const toastBox = document.getElementById('toastBox');
+            const toastMessage = document.getElementById('toastMessage');
+            const toastIcon = document.getElementById('toastIcon');
+
+            toastMessage.textContent = message;
+            if (type === 'error') {
+                toastIcon.className = 'fa-solid fa-triangle-exclamation text-rose-400';
+            } else if (type === 'success') {
+                toastIcon.className = 'fa-solid fa-circle-check text-emerald-400';
+            } else {
+                toastIcon.className = 'fa-solid fa-circle-info text-sky-400';
+            }
+
+            toastBox.classList.remove('opacity-0');
+            toastBox.classList.add('opacity-100');
+
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toastBox.classList.remove('opacity-100');
+                toastBox.classList.add('opacity-0');
+            }, 2500);
+        }
+
+        // ==========================================
+        // ИНИЦИАЛИЗАЦИЯ КАМЕРЫ
+        // ==========================================
+        async function initCamera() {
+            const fallbackEl = document.getElementById('cameraFallback');
+            try {
+                if (state.videoStream) {
+                    state.videoStream.getTracks().forEach(t => t.stop());
+                }
+
+                const constraints = {
+                    audio: false,
+                    video: {
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        focusMode: { ideal: 'continuous' }
+                    }
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                state.videoStream = stream;
+                videoEl.srcObject = stream;
+                fallbackEl.classList.add('hidden');
+            } catch (err) {
+                fallbackEl.classList.remove('hidden');
+            }
+        }
+
+        async function toggleZoom() {
+            const zoomLevels = [1.0, 1.5, 2.0];
+            const nextIdx = (zoomLevels.indexOf(state.zoomLevel) + 1) % zoomLevels.length;
+            state.zoomLevel = zoomLevels[nextIdx];
+
+            const zoomBtn = document.getElementById('zoomBtn');
+            zoomBtn.textContent = `${state.zoomLevel.toFixed(1)}x`;
+            zoomBtn.classList.toggle('text-emerald-400', state.zoomLevel > 1);
+            zoomBtn.classList.toggle('border-emerald-500/50', state.zoomLevel > 1);
+
+            if (state.videoStream) {
+                const track = state.videoStream.getVideoTracks()[0];
+                const caps = track.getCapabilities ? track.getCapabilities() : {};
+                if (caps.zoom) {
+                    try {
+                        const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, state.zoomLevel));
+                        await track.applyConstraints({ advanced: [{ zoom: targetZoom }] });
+                        return;
+                    } catch (e) {}
+                }
+            }
+            videoEl.style.transform = `scale(${state.zoomLevel})`;
+        }
+
+        async function toggleTorch() {
+            if (!state.videoStream) {
+                showToast('Камера не активна', 'error');
+                return;
+            }
+            const track = state.videoStream.getVideoTracks()[0];
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+
+            if (!capabilities.torch) {
+                showToast('Фонарик не поддерживается вашим браузером', 'info');
+                return;
+            }
+
+            try {
+                state.torchEnabled = !state.torchEnabled;
+                await track.applyConstraints({
+                    advanced: [{ torch: state.torchEnabled }]
+                });
+                const torchBtn = document.getElementById('torchBtn');
+                torchBtn.classList.toggle('bg-amber-400', state.torchEnabled);
+                torchBtn.classList.toggle('text-slate-950', state.torchEnabled);
+            } catch (e) {
+                showToast('Не удалось переключить фонарик', 'error');
+            }
+        }
+
+        // ==========================================
+        // ИНИЦИАЛИЗАЦИЯ OCR ДВИЖКА
+        // ==========================================
+        async function initOCR() {
+            try {
+                ocrStatusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0';
+                ocrStatusText.textContent = 'Загрузка нейросети...';
+
+                const worker = await Tesseract.createWorker('eng');
+                await worker.setParameters({
+                    tessedit_char_whitelist: '0123456789., -OolIZSGB',
+                    tessedit_pageseg_mode: '6',
+                    preserve_interword_spaces: '1'
+                });
+
+                state.ocrWorker = worker;
+                state.ocrReady = true;
+
+                ocrStatusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0';
+                ocrStatusText.textContent = 'Зрение активно';
+            } catch (error) {
+                ocrStatusDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0';
+                ocrStatusText.textContent = 'Ошибка OCR';
+            }
+        }
+
+        // =========================================================================
+        // КОНВЕЙЕР КОМПЬЮТЕРНОГО ЗРЕНИЯ
+        // =========================================================================
+        function extractAndProcessROI(passType = 'primary') {
+            if (!videoEl.videoWidth) return null;
+
+            const videoRect = videoEl.getBoundingClientRect();
+            const boxRect = roiBox.getBoundingClientRect();
+
+            const videoAspect = videoEl.videoWidth / videoEl.videoHeight;
+            const containerAspect = videoRect.width / videoRect.height;
+
+            let renderWidth, renderHeight, offsetX = 0, offsetY = 0;
+
+            if (videoAspect > containerAspect) {
+                renderHeight = videoRect.height;
+                renderWidth = videoRect.height * videoAspect;
+                offsetX = (renderWidth - videoRect.width) / 2;
+            } else {
+                renderWidth = videoRect.width;
+                renderHeight = videoRect.width / videoAspect;
+                offsetY = (renderHeight - videoRect.height) / 2;
+            }
+
+            const scaleX = videoEl.videoWidth / renderWidth;
+            const scaleY = videoEl.videoHeight / renderHeight;
+
+            const zoomFactor = state.zoomLevel || 1.0;
+            const rawW = (boxRect.width * scaleX) / zoomFactor;
+            const rawH = (boxRect.height * scaleY) / zoomFactor;
+
+            const centerX = ((boxRect.left + boxRect.width / 2) - videoRect.left + offsetX) * scaleX;
+            const centerY = ((boxRect.top + boxRect.height / 2) - videoRect.top + offsetY) * scaleY;
+
+            const relX = Math.max(0, centerX - rawW / 2);
+            const relY = Math.max(0, centerY - rawH / 2);
+
+            const targetContentW = 560;
+            const targetContentH = Math.max(140, Math.round((rawH / rawW) * targetContentW));
+            const padding = 24;
+
+            workCanvas.width = targetContentW + padding * 2;
+            workCanvas.height = targetContentH + padding * 2;
+
+            workCtx.fillStyle = '#FFFFFF';
+            workCtx.fillRect(0, 0, workCanvas.width, workCanvas.height);
+
+            workCtx.drawImage(
+                videoEl,
+                relX,
+                relY,
+                rawW,
+                rawH,
+                padding,
+                padding,
+                targetContentW,
+                targetContentH
+            );
+
+            const mode = VISION_MODES[state.visionModeIndex].id;
+            processCanvasPixels(workCtx, workCanvas.width, workCanvas.height, padding, mode, passType);
+
+            roiCanvas.width = workCanvas.width;
+            roiCanvas.height = workCanvas.height;
+            roiCtx.drawImage(workCanvas, 0, 0);
+
+            return workCanvas;
+        }
+
+        function processCanvasPixels(ctx, width, height, pad, mode, passType) {
+            const imgData = ctx.getImageData(0, 0, width, height);
+            const data = imgData.data;
+            const gray = new Uint8Array(width * height);
+
+            let minLum = 255, maxLum = 0;
+            for (let y = pad; y < height - pad; y++) {
+                for (let x = pad; x < width - pad; x++) {
+                    const idx = (y * width + x) * 4;
+                    const lum = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+                    gray[y * width + x] = lum;
+                    if (lum < minLum) minLum = lum;
+                    if (lum > maxLum) maxLum = lum;
+                }
+            }
+
+            const range = Math.max(1, maxLum - minLum);
+
+            let sumNorm = 0;
+            let count = 0;
+            for (let y = pad; y < height - pad; y++) {
+                for (let x = pad; x < width - pad; x++) {
+                    const p = y * width + x;
+                    let norm = Math.round(((gray[p] - minLum) / range) * 255);
+                    gray[p] = norm;
+                    sumNorm += norm;
+                    count++;
+                }
+            }
+            const globalMean = sumNorm / Math.max(1, count);
+
+            if (mode === 'contrast' || passType === 'soft_contrast') {
+                for (let y = pad; y < height - pad; y++) {
+                    for (let x = pad; x < width - pad; x++) {
+                        const p = y * width + x;
+                        let val = gray[p] < globalMean * 0.85 ? Math.max(0, gray[p] * 0.4) : Math.min(255, gray[p] * 1.25);
+                        const idx = p * 4;
+                        data[idx] = data[idx + 1] = data[idx + 2] = val;
+                    }
+                }
+                ctx.putImageData(imgData, 0, 0);
+                return;
+            }
+
+            const integral = new Int32Array(width * height);
+            for (let y = 0; y < height; y++) {
+                let rowSum = 0;
+                for (let x = 0; x < width; x++) {
+                    const p = y * width + x;
+                    const val = (y >= pad && y < height - pad && x >= pad && x < width - pad) ? gray[p] : 255;
+                    rowSum += val;
+                    integral[p] = rowSum + (y > 0 ? integral[(y - 1) * width + x] : 0);
+                }
+            }
+
+            const windowSize = 36;
+            const halfWin = windowSize >> 1;
+            const sensitivity = passType === 'strict' ? 0.82 : 0.88;
+            let blackPixels = 0;
+            let innerPixels = 0;
+
+            const binary = new Uint8Array(width * height);
+            binary.fill(255);
+
+            for (let y = pad; y < height - pad; y++) {
+                const y1 = Math.max(pad, y - halfWin);
+                const y2 = Math.min(height - pad - 1, y + halfWin);
+                for (let x = pad; x < width - pad; x++) {
+                    const x1 = Math.max(pad, x - halfWin);
+                    const x2 = Math.min(width - pad - 1, x + halfWin);
+
+                    const area = (x2 - x1 + 1) * (y2 - y1 + 1);
+                    const sum = integral[y2 * width + x2]
+                              - (y1 > 0 ? integral[(y1 - 1) * width + x2] : 0)
+                              - (x1 > 0 ? integral[y2 * width + (x1 - 1)] : 0)
+                              + (y1 > 0 && x1 > 0 ? integral[(y1 - 1) * width + (x1 - 1)] : 0);
+
+                    const p = y * width + x;
+                    const isDark = (gray[p] * area) < (sum * sensitivity);
+                    binary[p] = isDark ? 0 : 255;
+                    if (isDark) blackPixels++;
+                    innerPixels++;
+                }
+            }
+
+            const darkRatio = blackPixels / Math.max(1, innerPixels);
+            const shouldInvert = (mode === 'invert') || (passType === 'invert') || (mode === 'auto' && darkRatio > 0.58);
+
+            for (let y = pad; y < height - pad; y++) {
+                for (let x = pad; x < width - pad; x++) {
+                    const p = y * width + x;
+                    let val = binary[p];
+                    if (shouldInvert) val = 255 - val;
+
+                    const idx = p * 4;
+                    data[idx] = data[idx + 1] = data[idx + 2] = val;
+                }
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        // =========================================================================
+        // ПАРСЕР И КЛАССИФИКАТОР ЧИСЕЛ ПО БАЗЕ ФОРМАТОВ
+        // =========================================================================
+        function extractBestNumberFromText(rawText) {
+            if (!rawText || !rawText.trim()) return null;
+
+            let text = rawText.replace(NUMBER_FORMAT_DB.currencyAndUnitNoise, ' ');
+
+            text = text.split('').map((ch, idx, arr) => {
+                if (NUMBER_FORMAT_DB.glyphCorrections[ch]) {
+                    const prev = arr[idx - 1] || '';
+                    const next = arr[idx + 1] || '';
+                    if (/[\d.,\s]/.test(prev) || /[\d.,\s]/.test(next)) {
+                        return NUMBER_FORMAT_DB.glyphCorrections[ch];
+                    }
+                }
+                return ch;
+            }).join('');
+
+            text = text.replace(/[^\d.,\s'-]/g, ' ').replace(/\s+/g, ' ').trim();
+
+            const candidates = [];
+
+            for (const patternObj of NUMBER_FORMAT_DB.patterns) {
+                const matches = text.match(patternObj.regex);
+                if (!matches) continue;
+
+                for (const rawMatch of matches) {
+                    const cleanMatch = rawMatch.trim();
+
+                    const isIgnored = NUMBER_FORMAT_DB.ignorePatterns.some(rx => rx.test(cleanMatch.replace(/\s+/g, '')));
+                    if (isIgnored) continue;
+
+                    const numericValue = patternObj.normalize(cleanMatch);
+                    if (isNaN(numericValue) || numericValue <= 0 || numericValue > 100000000) continue;
+
+                    const digitCount = cleanMatch.replace(/\D/g, '').length;
+                    let score = patternObj.priority + digitCount * 6;
+
+                    if (numericValue >= 100 && numericValue % 100 === 0) score += 12;
+                    if (numericValue >= 1000 && numericValue % 500 === 0) score += 10;
+
+                    candidates.push({
+                        value: numericValue,
+                        raw: cleanMatch,
+                        formatName: patternObj.name,
+                        score: score
+                    });
+                }
+            }
+
+            if (candidates.length === 0) return null;
+            candidates.sort((a, b) => b.score - a.score);
+            return candidates[0];
+        }
+
+        // =========================================================================
+        // МНОГОПРОХОДНОЕ РАСПОЗНАВАНИЕ
+        // =========================================================================
+        async function handleScanAndCalculate() {
+            if (state.isScanning) return;
+
+            if (!state.ocrReady || !state.ocrWorker) {
+                showToast('Подождите секунду, нейросеть запускается...', 'info');
+                return;
+            }
+
+            if (!videoEl.videoWidth) {
+                showToast('Камера не передает изображение', 'error');
+                return;
+            }
+
+            try {
+                state.isScanning = true;
+                captureBtn.disabled = true;
+                captureBtnText.textContent = 'АНАЛИЗ КАДРА...';
+                liveConfidenceBadge.textContent = 'Сканирование...';
+
+                const passes = ['primary', 'soft_contrast', 'invert'];
+                let bestResult = null;
+                let lastRawText = '';
+
+                for (const pass of passes) {
+                    const processedCanvas = extractAndProcessROI(pass);
+                    if (!processedCanvas) break;
+
+                    const { data } = await state.ocrWorker.recognize(processedCanvas);
+                    lastRawText = (data.text || '').replace(/\s+/g, ' ').trim();
+
+                    const parsed = extractBestNumberFromText(lastRawText);
+                    if (parsed) {
+                        bestResult = {
+                            ...parsed,
+                            confidence: Math.round(data.confidence || 75),
+                            passUsed: pass
+                        };
+                        if (parsed.score >= 90 || String(parsed.value).length >= 3) {
+                            break;
+                        }
+                    }
+                }
+
+                rawOcrPreview.textContent = lastRawText ? `OCR: "${lastRawText}"` : 'Цифры не найдены';
+
+                if (!bestResult) {
+                    liveConfidenceBadge.textContent = 'Повторите наведение';
+                    showToast('Цифры размыты. Держите ценник ровно в рамке или включите 1.5x зум', 'error');
+                    return;
+                }
+
+                if (state.currentOp === '/' && bestResult.value === 0) {
+                    showToast('Деление на ноль невозможно', 'error');
+                    return;
+                }
+
+                liveConfidenceBadge.textContent = `Точность: ${Math.max(78, bestResult.confidence)}%`;
+
+                const opSymbol = formatOpSymbol(state.currentOp);
+                scanFeedbackText.textContent = `${opSymbol} ${formatNumber(bestResult.value)}`;
+                scanFormatTag.textContent = bestResult.formatName;
+                scanFeedbackOverlay.classList.remove('hidden');
+                setTimeout(() => {
+                    scanFeedbackOverlay.classList.add('hidden');
+                }, 750);
+
+                if (navigator.vibrate) {
+                    navigator.vibrate(45);
+                }
+
+                addOperation(state.currentOp, bestResult.value, bestResult.formatName);
+            } catch (err) {
+                showToast('Ошибка при распознавании кадра', 'error');
+            } finally {
+                state.isScanning = false;
+                captureBtn.disabled = false;
+                updateCaptureButtonLabel();
+            }
+        }
+
+        // ==========================================
+        // МАТЕМАТИЧЕСКОЕ ЯДРО И ИСТОРИЯ
+        // ==========================================
+        function addOperation(op, value, formatName = 'Скан ценника') {
+            const newItem = {
+                id: Date.now().toString() + Math.random().toString(36).substring(2, 6),
+                op: op,
+                value: Number(value),
+                note: formatName,
+                timestamp: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            };
+
+            state.operations.push(newItem);
+            saveStateToPhone();
+            renderAll();
+        }
+
+        function deleteOperation(id) {
+            state.operations = state.operations.filter(item => item.id !== id);
+            saveStateToPhone();
+            renderAll();
+        }
+
+        function undoLastOperation() {
+            if (state.operations.length === 0) return;
+            state.operations.pop();
+            saveStateToPhone();
+            renderAll();
+            showToast('Последний скан отменен', 'info');
+        }
+
+        function calculateRunningTotals() {
+            let runningTotal = 0;
+            const enriched = state.operations.map((item, index) => {
+                if (index === 0 && (item.op === '*' || item.op === '/')) {
+                    runningTotal = item.value;
+                } else {
+                    switch (item.op) {
+                        case '+': runningTotal += item.value; break;
+                        case '-': runningTotal -= item.value; break;
+                        case '*': runningTotal *= item.value; break;
+                        case '/': runningTotal = item.value !== 0 ? runningTotal / item.value : runningTotal; break;
+                    }
+                }
+                return { ...item, stepTotal: runningTotal };
+            });
+
+            return { total: runningTotal, items: enriched };
+        }
+
+        function formatNumber(num) {
+            if (num === null || num === undefined || isNaN(num)) return '0';
+            const rounded = Math.round((num + Number.EPSILON) * 100) / 100;
+            return rounded.toLocaleString('ru-RU', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 2
+            });
+        }
+
+        function formatOpSymbol(op) {
+            const map = { '+': '+', '-': '−', '*': '×', '/': '÷' };
+            return map[op] || '+';
+        }
+
+        function getOpBadgeStyle(op) {
+            switch (op) {
+                case '+': return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
+                case '-': return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+                case '*': return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+                case '/': return 'bg-sky-500/15 text-sky-400 border-sky-500/30';
+                default: return 'bg-slate-800 text-slate-300';
+            }
+        }
+
+        function renderAll() {
+            const { total, items } = calculateRunningTotals();
+
+            totalDisplay.textContent = formatNumber(total);
+            itemsCountBadge.textContent = `Позиций: ${items.length}`;
+            document.getElementById('undoBtn').disabled = items.length === 0;
+
+            Array.from(historyList.children).forEach(child => {
+                if (child.id !== 'emptyHistoryState') child.remove();
+            });
+
+            if (items.length === 0) {
+                emptyHistoryState.classList.remove('hidden');
+                return;
+            }
+
+            emptyHistoryState.classList.add('hidden');
+
+            [...items].reverse().forEach((item, reversedIdx) => {
+                const realIndex = items.length - reversedIdx;
+                const row = document.createElement('div');
+                row.className = 'flex items-center justify-between bg-slate-900 border border-slate-800/90 rounded-xl px-3 py-2.5 transition';
+
+                row.innerHTML = `
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <span class="text-[11px] font-mono text-slate-500 w-5">#${realIndex}</span>
+                        <span class="w-7 h-7 rounded-lg border flex items-center justify-center font-bold text-sm shrink-0 ${getOpBadgeStyle(item.op)}">
+                            ${formatOpSymbol(item.op)}
+                        </span>
+                        <div class="min-w-0">
+                            <div class="mono-num font-bold text-sm text-slate-100 truncate">
+                                ${formatNumber(item.value)}
+                            </div>
+                            <div class="text-[10px] text-slate-400 truncate">
+                                ${item.note} • <span class="text-slate-500">Итог: ${formatNumber(item.stepTotal)}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <span class="text-[10px] font-mono text-slate-500 mr-1">${item.timestamp}</span>
+                        <button class="delete-item-btn w-7 h-7 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 flex items-center justify-center transition" title="Удалить строку">
+                            <i class="fa-solid fa-xmark text-sm"></i>
+                        </button>
+                    </div>
+                `;
+
+                row.querySelector('.delete-item-btn').addEventListener('click', () => {
+                    deleteOperation(item.id);
+                });
+
+                historyList.appendChild(row);
+            });
+        }
+
+        function setActiveOperator(op) {
+            state.currentOp = op;
+            const opButtons = document.querySelectorAll('.op-btn');
+
+            const activeStyles = {
+                '+': 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg shadow-emerald-500/20',
+                '-': 'bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/20',
+                '*': 'bg-amber-400 text-slate-950 border-amber-300 shadow-lg shadow-amber-400/20',
+                '/': 'bg-sky-400 text-slate-950 border-sky-300 shadow-lg shadow-sky-400/20'
+            };
+
+            const inactiveStyle = 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750';
+
+            opButtons.forEach(btn => {
+                const btnOp = btn.getAttribute('data-op');
+                const subLabel = btn.querySelector('span:last-child');
+                if (btnOp === op) {
+                    btn.className = `op-btn py-2.5 rounded-xl font-bold text-xl flex flex-col items-center justify-center border transition active:scale-95 ${activeStyles[op]}`;
+                    if (subLabel) subLabel.className = 'text-[10px] font-semibold uppercase tracking-tight';
+                } else {
+                    btn.className = `op-btn py-2.5 rounded-xl font-bold text-xl flex flex-col items-center justify-center border transition active:scale-95 ${inactiveStyle}`;
+                    if (subLabel) subLabel.className = 'text-[10px] font-medium uppercase tracking-tight text-slate-400';
+                }
+            });
+
+            updateCaptureButtonLabel();
+            saveStateToPhone();
+        }
+
+        function updateCaptureButtonLabel() {
+            const sym = formatOpSymbol(state.currentOp);
+            captureBtnText.innerHTML = `СКАНИРОВАТЬ ЧИСЛО (<span id="activeOpLabel">${sym}</span>)`;
+        }
+
+        // ==========================================
+        // ОБРАБОТЧИКИ СОБЫТИЙ
+        // ==========================================
+        window.addEventListener('DOMContentLoaded', () => {
+            setupPWA();
+            loadStateFromPhone();
+            initCamera();
+            initOCR();
+            renderAll();
+
+            setInterval(() => {
+                if (!state.isScanning && videoEl.videoWidth) {
+                    extractAndProcessROI('primary');
+                }
+            }, 350);
+
+            document.querySelectorAll('.op-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    setActiveOperator(btn.getAttribute('data-op'));
+                });
+            });
+
+            captureBtn.addEventListener('click', handleScanAndCalculate);
+
+            document.getElementById('switchVisionModeBtn').addEventListener('click', () => {
+                state.visionModeIndex = (state.visionModeIndex + 1) % VISION_MODES.length;
+                const modeObj = VISION_MODES[state.visionModeIndex];
+                document.getElementById('visionModeText').textContent = modeObj.label;
+                extractAndProcessROI('primary');
+                showToast(`Режим зрения: ${modeObj.label}`, 'info');
+            });
+
+            document.getElementById('retryCameraBtn').addEventListener('click', initCamera);
+            document.getElementById('zoomBtn').addEventListener('click', toggleZoom);
+            document.getElementById('torchBtn').addEventListener('click', toggleTorch);
+            document.getElementById('undoBtn').addEventListener('click', undoLastOperation);
+
+            // Сброс всей суммы
+            const confirmResetModal = document.getElementById('confirmResetModal');
+            document.getElementById('clearAllBtn').addEventListener('click', () => {
+                if (state.operations.length === 0) {
+                    showToast('Список уже пуст', 'info');
+                    return;
+                }
+                confirmResetModal.classList.remove('hidden');
+            });
+            document.getElementById('cancelResetBtn').addEventListener('click', () => {
+                confirmResetModal.classList.add('hidden');
+            });
+            document.getElementById('confirmResetBtn').addEventListener('click', () => {
+                state.operations = [];
+                saveStateToPhone();
+                renderAll();
+                confirmResetModal.classList.add('hidden');
+                showToast('Сумма сброшена', 'info');
+            });
+        });
+    </script>
+</body>
+</html>
